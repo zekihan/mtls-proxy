@@ -160,14 +160,45 @@ func newForwardProxy(upstream string, transport http.RoundTripper) http.Handler 
 	})
 }
 
-func loadCertificate(identity, certFile, keyFile string) (tls.Certificate, error) {
-	switch {
-	case identity != "" && certFile == "" && keyFile == "":
-		return keychainCertificate(identity)
-	case identity == "" && certFile != "" && keyFile != "":
-		return tls.LoadX509KeyPair(certFile, keyFile)
+type certificateSource struct {
+	identity string
+	certFile string
+	keyFile  string
+	certEnv  string
+	keyEnv   string
+}
+
+func loadCertificate(source certificateSource) (tls.Certificate, error) {
+	switch source {
+	case certificateSource{identity: source.identity}:
+		if source.identity != "" {
+			return keychainCertificate(source.identity)
+		}
+	case certificateSource{certFile: source.certFile, keyFile: source.keyFile}:
+		if source.certFile != "" && source.keyFile != "" {
+			return tls.LoadX509KeyPair(source.certFile, source.keyFile)
+		}
+	case certificateSource{certEnv: source.certEnv, keyEnv: source.keyEnv}:
+		if source.certEnv != "" && source.keyEnv != "" {
+			return certificateFromEnv(source.certEnv, source.keyEnv)
+		}
 	}
-	return tls.Certificate{}, errors.New("set either -identity, or both -cert and -key")
+	return tls.Certificate{}, errors.New("set one of -identity, -cert with -key, or -cert-env with -key-env")
+}
+
+// certificateFromEnv removes the variables once read, so child processes and
+// later code never see the key.
+func certificateFromEnv(certEnv, keyEnv string) (tls.Certificate, error) {
+	certPEM, keyPEM := os.Getenv(certEnv), os.Getenv(keyEnv)
+	os.Unsetenv(certEnv)
+	os.Unsetenv(keyEnv)
+	if certPEM == "" {
+		return tls.Certificate{}, fmt.Errorf("%s is empty", certEnv)
+	}
+	if keyPEM == "" {
+		return tls.Certificate{}, fmt.Errorf("%s is empty", keyEnv)
+	}
+	return tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 }
 
 func serve(ctx context.Context, routes []route, transport http.RoundTripper, serverCert tls.Certificate) error {
@@ -214,6 +245,8 @@ func main() {
 	identity := flag.String("identity", "", "macOS Keychain identity common name, e.g. clients-laptop")
 	certFile := flag.String("cert", "", "PEM client certificate, used with -key")
 	keyFile := flag.String("key", "", "PEM client private key, used with -cert")
+	certEnv := flag.String("cert-env", "", "environment variable holding the PEM client certificate, used with -key-env")
+	keyEnv := flag.String("key-env", "", "environment variable holding the PEM client private key, used with -cert-env")
 	caOut := flag.String("ca-out", "", "path to write the loopback certificate for providers to trust")
 	flag.Var(routeFlag{routes: &routes}, "route", "HTTPS reverse route, listen=upstream, e.g. 127.0.0.1:18443=app.example.com (repeatable)")
 	flag.Var(routeFlag{routes: &routes, forward: true}, "forward", "HTTP_PROXY route limited to one host, listen=upstream, e.g. 127.0.0.1:18445=s3.example.com (repeatable)")
@@ -226,7 +259,13 @@ func main() {
 	if needsTLS && *caOut == "" {
 		log.Fatal("-ca-out is required with -route")
 	}
-	cert, err := loadCertificate(*identity, *certFile, *keyFile)
+	cert, err := loadCertificate(certificateSource{
+		identity: *identity,
+		certFile: *certFile,
+		keyFile:  *keyFile,
+		certEnv:  *certEnv,
+		keyEnv:   *keyEnv,
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

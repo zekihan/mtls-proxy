@@ -6,7 +6,7 @@ upstream host. Terraform providers are the usual case: many have no client
 certificate setting and ignore `HTTPS_PROXY`.
 
 The client certificate can come from the macOS Keychain, so the private key never
-has to be exported, or from PEM files on platforms without a Keychain.
+has to be exported, from PEM files, or from environment variables.
 
 ## Install
 
@@ -28,7 +28,14 @@ mtls-proxy -identity clients-laptop -ca-out ~/.local/state/mtls-proxy/ca.pem \
 # PEM files
 mtls-proxy -cert client.pem -key client.key -ca-out ca.pem \
   -route 127.0.0.1:18443=app.example.com
+
+# PEM values in environment variables, cleared once read
+CERT_PEM="$cert" KEY_PEM="$key" mtls-proxy -cert-env CERT_PEM -key-env KEY_PEM \
+  -ca-out ca.pem -route 127.0.0.1:18443=app.example.com
 ```
+
+Set the variables only on the proxy's command, so other processes do not inherit the
+key. Do not do this in a `bash -x` script, because tracing prints the values.
 
 The proxy only listens on loopback IPs and refuses anything else.
 
