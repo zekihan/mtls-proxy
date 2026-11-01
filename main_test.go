@@ -122,7 +122,7 @@ func TestLoadCertificateFromPEMFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cert, err := loadCertificate("", certFile, keyFile)
+	cert, err := loadCertificate(certificateSource{certFile: certFile, keyFile: keyFile})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,10 +131,52 @@ func TestLoadCertificateFromPEMFiles(t *testing.T) {
 	}
 }
 
+func TestLoadCertificateFromEnvClearsTheVariables(t *testing.T) {
+	leaf := newPKI(t).leaf(t, x509.ExtKeyUsageClientAuth)
+	der, err := x509.MarshalPKCS8PrivateKey(leaf.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_CERT", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Certificate[0]})))
+	t.Setenv("TEST_KEY", string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})))
+
+	cert, err := loadCertificate(certificateSource{certEnv: "TEST_CERT", keyEnv: "TEST_KEY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(cert.Certificate[0]) != string(leaf.Certificate[0]) {
+		t.Error("loaded a different certificate")
+	}
+	for _, name := range []string{"TEST_CERT", "TEST_KEY"} {
+		if _, found := os.LookupEnv(name); found {
+			t.Errorf("%s was not cleared", name)
+		}
+	}
+}
+
+func TestLoadCertificateFromEmptyEnvNamesTheVariable(t *testing.T) {
+	t.Setenv("TEST_CERT", "")
+	t.Setenv("TEST_KEY", "x")
+	_, err := loadCertificate(certificateSource{certEnv: "TEST_CERT", keyEnv: "TEST_KEY"})
+	if err == nil || !strings.Contains(err.Error(), "TEST_CERT") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestLoadCertificateRequiresOneSource(t *testing.T) {
-	for _, args := range [][3]string{{}, {"id", "c", "k"}, {"id", "c", ""}, {"", "c", ""}, {"", "", "k"}} {
-		if _, err := loadCertificate(args[0], args[1], args[2]); err == nil {
-			t.Errorf("loadCertificate%v accepted", args)
+	for _, source := range []certificateSource{
+		{},
+		{identity: "id", certFile: "c", keyFile: "k"},
+		{identity: "id", certFile: "c"},
+		{certFile: "c"},
+		{keyFile: "k"},
+		{certEnv: "C"},
+		{keyEnv: "K"},
+		{identity: "id", certEnv: "C", keyEnv: "K"},
+		{certFile: "c", keyFile: "k", certEnv: "C", keyEnv: "K"},
+	} {
+		if _, err := loadCertificate(source); err == nil {
+			t.Errorf("loadCertificate(%+v) accepted", source)
 		}
 	}
 }
