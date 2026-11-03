@@ -338,6 +338,59 @@ func startServe(t *testing.T, ca pki, upstream string) (string, *x509.CertPool) 
 	return "", nil
 }
 
+func TestServerCertificateOnlySignsListenerIPs(t *testing.T) {
+	serverCert, err := newServerCertificate([]route{{listen: "127.0.0.1:1"}, {listen: "[::1]:1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := x509.ParseCertificate(serverCert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	if _, err := ca.Verify(x509.VerifyOptions{Roots: roots, DNSName: "127.0.0.1"}); err != nil {
+		t.Fatalf("loopback certificate does not verify: %v", err)
+	}
+
+	verify := func(dnsNames []string, ips []net.IP) error {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+			SerialNumber: big.NewInt(2),
+			NotBefore:    time.Now().Add(-time.Minute),
+			NotAfter:     time.Now().Add(time.Hour),
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			DNSNames:     dnsNames,
+			IPAddresses:  ips,
+		}, ca, &key.PublicKey, serverCert.PrivateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = leaf.Verify(x509.VerifyOptions{Roots: roots})
+		return err
+	}
+	if err := verify(nil, []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback}); err != nil {
+		t.Errorf("leaf for the listener IPs rejected: %v", err)
+	}
+	for _, name := range []string{"example.com", "localhost"} {
+		if err := verify([]string{name}, nil); err == nil {
+			t.Errorf("leaf for %s accepted", name)
+		}
+	}
+	for _, ip := range []string{"127.0.0.2", "10.0.0.1", "::2"} {
+		if err := verify(nil, []net.IP{net.ParseIP(ip)}); err == nil {
+			t.Errorf("leaf for %s accepted", ip)
+		}
+	}
+}
+
 func TestWriteCertificateReplacesSymlink(t *testing.T) {
 	serverCert, err := newServerCertificate([]route{{listen: "127.0.0.1:1"}})
 	if err != nil {

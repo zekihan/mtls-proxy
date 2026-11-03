@@ -92,6 +92,9 @@ func newServerCertificate(routes []route) (tls.Certificate, error) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		// Clients trust this certificate as a CA, so limit what it can sign to
+		// the listener IPs. The .invalid TLD never resolves, so no DNS name passes.
+		PermittedDNSDomains: []string{"invalid"},
 	}
 	seen := map[string]bool{}
 	for _, r := range routes {
@@ -104,7 +107,13 @@ func newServerCertificate(routes []route) (tls.Certificate, error) {
 		}
 		if !seen[host] {
 			seen[host] = true
-			template.IPAddresses = append(template.IPAddresses, net.ParseIP(host))
+			ip := net.ParseIP(host)
+			if ip4 := ip.To4(); ip4 != nil {
+				ip = ip4
+			}
+			template.IPAddresses = append(template.IPAddresses, ip)
+			bits := len(ip) * 8
+			template.PermittedIPRanges = append(template.PermittedIPRanges, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
 		}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
