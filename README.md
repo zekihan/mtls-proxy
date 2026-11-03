@@ -65,3 +65,5 @@ such a client without `HTTP_PROXY`, or its requests leave the machine unencrypte
 - Upstream certificates are verified against the system trust store.
 - Any local process can use your client identity through the proxy while it runs.
   Stop it when you finish.
+- Requests a browser makes on behalf of another site (`Sec-Fetch-Site: cross-site` or
+  `same-site`) are refused, so a web page cannot use your client identity.

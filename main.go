@@ -168,10 +168,20 @@ func newTransport(cert tls.Certificate, roots *x509.CertPool) *http.Transport {
 
 func newProxy(upstream string, transport http.RoundTripper) http.Handler {
 	target := &url.URL{Scheme: "https", Host: upstream}
-	return &httputil.ReverseProxy{
+	proxy := &httputil.ReverseProxy{
 		Rewrite:   func(r *httputil.ProxyRequest) { r.SetURL(target) },
 		Transport: transport,
 	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Browsers set Sec-Fetch-Site and pages cannot change it. Refuse requests
+		// made by another site, so a web page cannot use the client identity.
+		switch r.Header.Get("Sec-Fetch-Site") {
+		case "", "same-origin", "none":
+			proxy.ServeHTTP(w, r)
+		default:
+			http.Error(w, "cross-site request not allowed", http.StatusForbidden)
+		}
+	})
 }
 
 // newForwardProxy serves clients that use HTTP_PROXY, which keeps the real

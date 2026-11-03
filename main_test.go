@@ -211,6 +211,39 @@ func TestProxyPresentsCertificateAndRewritesHost(t *testing.T) {
 	}
 }
 
+func TestProxyRejectsCrossSiteBrowserRequests(t *testing.T) {
+	ca := newPKI(t)
+	upstream := mtlsUpstream(t, ca, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "same-origin" && site != "none" {
+			t.Errorf("request with Sec-Fetch-Site %q reached upstream", site)
+		}
+	}))
+	transport := newTransport(ca.leaf(t, x509.ExtKeyUsageClientAuth), ca.pool)
+	proxy := httptest.NewServer(newProxy(upstream, transport))
+	defer proxy.Close()
+
+	for site, want := range map[string]int{
+		"cross-site":  http.StatusForbidden,
+		"same-site":   http.StatusForbidden,
+		"same-origin": http.StatusOK,
+		"none":        http.StatusOK,
+	} {
+		request, err := http.NewRequest(http.MethodGet, proxy.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Sec-Fetch-Site", site)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != want {
+			t.Errorf("Sec-Fetch-Site %s got status %d, want %d", site, response.StatusCode, want)
+		}
+	}
+}
+
 func TestProxyFailsWithUntrustedCertificate(t *testing.T) {
 	ca := newPKI(t)
 	upstream := mtlsUpstream(t, ca, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
