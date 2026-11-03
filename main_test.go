@@ -338,6 +338,39 @@ func startServe(t *testing.T, ca pki, upstream string) (string, *x509.CertPool) 
 	return "", nil
 }
 
+func TestWriteCertificateReplacesSymlink(t *testing.T) {
+	serverCert, err := newServerCertificate([]route{{listen: "127.0.0.1:1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	caFile := filepath.Join(dir, "ca.pem")
+	if err := os.Symlink(victim, caFile); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeCertificate(caFile, serverCert); err != nil {
+		t.Fatal(err)
+	}
+	if kept, _ := os.ReadFile(victim); string(kept) != "keep" {
+		t.Errorf("symlink target was overwritten with %q", kept)
+	}
+	info, err := os.Lstat(caFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("ca file mode %v, want a regular file", info.Mode())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Errorf("left %d entries in the directory, want 2", len(entries))
+	}
+}
+
 func TestServeTrustedThroughWrittenCertificate(t *testing.T) {
 	ca := newPKI(t)
 	upstream := mtlsUpstream(t, ca, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

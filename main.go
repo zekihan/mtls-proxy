@@ -114,12 +114,31 @@ func newServerCertificate(routes []route) (tls.Certificate, error) {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }
 
+// writeCertificate renames a new file over path, so it never writes through a
+// symlink or into a file that another user created there.
 func writeCertificate(path string, cert tls.Certificate) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
-	return os.WriteFile(path, block, 0o644)
+	file, err := os.CreateTemp(dir, ".mtls-proxy-*.pem")
+	if err != nil {
+		return err
+	}
+	_, err = file.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}))
+	if err == nil {
+		err = file.Chmod(0o644)
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(file.Name(), path)
+	}
+	if err != nil {
+		os.Remove(file.Name())
+	}
+	return err
 }
 
 func newTransport(cert tls.Certificate, roots *x509.CertPool) *http.Transport {
