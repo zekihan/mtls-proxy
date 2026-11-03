@@ -37,6 +37,16 @@ CERT_PEM="$cert" KEY_PEM="$key" mtls-proxy -cert-env CERT_PEM -key-env KEY_PEM \
 Set the variables only on the proxy's command, so other processes do not inherit the
 key. Do not do this in a `bash -x` script, because tracing prints the values.
 
+Clearing them does not erase the environment the proxy started with. Processes running
+as your user can still read the key there (`/proc/<pid>/environ` on Linux, `ps -E` on
+macOS) until the proxy exits. To keep it out of the environment, pass it through process
+substitution instead:
+
+```bash
+mtls-proxy -cert <(your-secret-command cert) -key <(your-secret-command key) \
+  -ca-out ca.pem -route 127.0.0.1:18443=app.example.com
+```
+
 The proxy only listens on loopback IPs and refuses anything else.
 
 ### `-route`: HTTPS reverse proxy
