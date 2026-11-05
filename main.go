@@ -14,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net"
@@ -207,6 +208,10 @@ type certificateSource struct {
 }
 
 func loadCertificate(source certificateSource) (tls.Certificate, error) {
+	return loadCertificateWithEnv(source, os.Getenv)
+}
+
+func loadCertificateWithEnv(source certificateSource, getenv func(string) string) (tls.Certificate, error) {
 	switch source {
 	case certificateSource{identity: source.identity}:
 		if source.identity != "" {
@@ -218,7 +223,7 @@ func loadCertificate(source certificateSource) (tls.Certificate, error) {
 		}
 	case certificateSource{certEnv: source.certEnv, keyEnv: source.keyEnv}:
 		if source.certEnv != "" && source.keyEnv != "" {
-			return certificateFromEnv(source.certEnv, source.keyEnv)
+			return certificateFromEnv(source.certEnv, source.keyEnv, getenv)
 		}
 	}
 	return tls.Certificate{}, errors.New("set one of -identity, -cert with -key, or -cert-env with -key-env")
@@ -226,8 +231,8 @@ func loadCertificate(source certificateSource) (tls.Certificate, error) {
 
 // certificateFromEnv removes the variables once read, so child processes and
 // later code never see the key.
-func certificateFromEnv(certEnv, keyEnv string) (tls.Certificate, error) {
-	certPEM, keyPEM := os.Getenv(certEnv), os.Getenv(keyEnv)
+func certificateFromEnv(certEnv, keyEnv string, getenv func(string) string) (tls.Certificate, error) {
+	certPEM, keyPEM := getenv(certEnv), getenv(keyEnv)
 	os.Unsetenv(certEnv)
 	os.Unsetenv(keyEnv)
 	if certPEM == "" {
@@ -302,41 +307,58 @@ func serve(ctx context.Context, routes []route, transport http.RoundTripper, caO
 	return err
 }
 
-func main() {
+func run(ctx context.Context, args []string, getenv func(string) string, stderr io.Writer) error {
+	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
+	flags.SetOutput(stderr)
 	var routes []route
-	identity := flag.String("identity", "", "macOS Keychain identity common name, e.g. clients-laptop")
-	certFile := flag.String("cert", "", "PEM client certificate, used with -key")
-	keyFile := flag.String("key", "", "PEM client private key, used with -cert")
-	certEnv := flag.String("cert-env", "", "environment variable holding the PEM client certificate, used with -key-env")
-	keyEnv := flag.String("key-env", "", "environment variable holding the PEM client private key, used with -cert-env")
-	caOut := flag.String("ca-out", "", "path to write the loopback certificate for providers to trust")
-	flag.Var(routeFlag{routes: &routes}, "route", "HTTPS reverse route, listen=upstream, e.g. 127.0.0.1:18443=app.example.com (repeatable)")
-	flag.Var(routeFlag{routes: &routes, forward: true}, "forward", "HTTP_PROXY route limited to one host, listen=upstream, e.g. 127.0.0.1:18445=s3.example.com (repeatable)")
-	flag.Parse()
+	identity := flags.String("identity", "", "macOS Keychain identity common name, e.g. clients-laptop")
+	certFile := flags.String("cert", "", "PEM client certificate, used with -key")
+	keyFile := flags.String("key", "", "PEM client private key, used with -cert")
+	certEnv := flags.String("cert-env", "", "environment variable holding the PEM client certificate, used with -key-env")
+	keyEnv := flags.String("key-env", "", "environment variable holding the PEM client private key, used with -cert-env")
+	caOut := flags.String("ca-out", "", "path to write the loopback certificate for providers to trust")
+	flags.Var(routeFlag{routes: &routes}, "route", "HTTPS reverse route, listen=upstream, e.g. 127.0.0.1:18443=app.example.com (repeatable)")
+	flags.Var(routeFlag{routes: &routes, forward: true}, "forward", "HTTP_PROXY route limited to one host, listen=upstream, e.g. 127.0.0.1:18445=s3.example.com (repeatable)")
+	if err := flags.Parse(args); err != nil {
+		return flagError{err}
+	}
 
 	if len(routes) == 0 {
-		log.Fatal("at least one -route or -forward is required")
+		return errors.New("at least one -route or -forward is required")
 	}
 	needsTLS := slices.ContainsFunc(routes, func(r route) bool { return !r.forward })
 	if needsTLS && *caOut == "" {
-		log.Fatal("-ca-out is required with -route")
+		return errors.New("-ca-out is required with -route")
 	}
-	cert, err := loadCertificate(certificateSource{
+	cert, err := loadCertificateWithEnv(certificateSource{
 		identity: *identity,
 		certFile: *certFile,
 		keyFile:  *keyFile,
 		certEnv:  *certEnv,
 		keyEnv:   *keyEnv,
-	})
+	}, getenv)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if err := checkClientCertificate(&cert, time.Now(), log.Default()); err != nil {
-		log.Fatal(err)
+		return err
 	}
+	return serve(ctx, routes, newTransport(cert, nil), *caOut)
+}
+
+type flagError struct{ error }
+
+func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := serve(ctx, routes, newTransport(cert, nil), *caOut); err != nil {
+	if err := run(ctx, os.Args[1:], os.Getenv, os.Stderr); err != nil {
+		var parseErr flagError
+		if errors.As(err, &parseErr) {
+			if errors.Is(parseErr.error, flag.ErrHelp) {
+				return
+			}
+			os.Exit(2)
+		}
 		log.Fatal(err)
 	}
 }
