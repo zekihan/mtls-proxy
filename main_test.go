@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -331,27 +332,11 @@ func freeAddr(t *testing.T) string {
 func startServe(t *testing.T, ca pki, upstream string) (string, *x509.CertPool) {
 	t.Helper()
 	routes := []route{{listen: freeAddr(t), upstream: upstream}}
-	serverCert, err := newServerCertificate(routes)
-	if err != nil {
-		t.Fatal(err)
-	}
 	caFile := filepath.Join(t.TempDir(), "state", "ca.pem")
-	if err := writeCertificate(caFile, serverCert); err != nil {
-		t.Fatal(err)
-	}
-	written, err := os.ReadFile(caFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(written) {
-		t.Fatal("written certificate does not parse")
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	transport := newTransport(ca.leaf(t, x509.ExtKeyUsageClientAuth), ca.pool)
-	go func() { done <- serve(ctx, routes, transport, serverCert) }()
+	go func() { done <- serve(ctx, routes, transport, caFile) }()
 	t.Cleanup(func() {
 		cancel()
 		if err := <-done; err != nil {
@@ -360,15 +345,62 @@ func startServe(t *testing.T, ca pki, upstream string) (string, *x509.CertPool) 
 	})
 
 	for range 100 {
+		written, err := os.ReadFile(caFile)
+		if err != nil {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
 		conn, err := net.Dial("tcp", routes[0].listen)
 		if err == nil {
 			conn.Close()
+			roots := x509.NewCertPool()
+			if !roots.AppendCertsFromPEM(written) {
+				t.Fatal("written certificate does not parse")
+			}
 			return routes[0].listen, roots
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("proxy did not start")
 	return "", nil
+}
+
+func TestServeBindFailurePreservesCaOut(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	first := freeAddr(t)
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	original := []byte("existing certificate")
+	if err := os.WriteFile(caFile, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(caFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := []route{{listen: first}, {listen: occupied.Addr().String()}}
+	if err := serve(context.Background(), routes, http.DefaultTransport, caFile); err == nil {
+		t.Fatal("serve succeeded with an occupied address")
+	}
+	after, err := os.Stat(caFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(caFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(contents, original) || !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatal("bind failure changed the CA file")
+	}
+	listener, err := net.Listen("tcp", first)
+	if err != nil {
+		t.Fatalf("first listener was not closed: %v", err)
+	}
+	listener.Close()
 }
 
 func TestServerCertificateOnlySignsListenerIPs(t *testing.T) {
