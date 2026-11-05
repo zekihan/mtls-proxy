@@ -571,3 +571,98 @@ func TestServePassesWebSocketUpgradeOverTLS(t *testing.T) {
 		t.Fatalf("reply %q err %v", reply, err)
 	}
 }
+
+func TestRunValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"no routes", nil, "at least one -route or -forward is required"},
+		{"route needs CA", []string{"-route", "127.0.0.1:0=example.com"}, "-ca-out is required with -route"},
+		{"forward does not need CA", []string{"-forward", "127.0.0.1:0=example.com"}, "set one of -identity"},
+		{"invalid address", []string{"-route", "bad=example.com"}, "missing port"},
+		{"non loopback", []string{"-forward", "0.0.0.0:0=example.com"}, "loopback IP"},
+		{"conflicting sources", []string{"-forward", "127.0.0.1:0=example.com", "-identity", "id", "-cert", "c", "-key", "k"}, "set one of -identity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			err := run(context.Background(), tc.args, os.Getenv, &stderr)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, stderr = %q; want %q", err, stderr.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestRouteFlags(t *testing.T) {
+	var routes []route
+	reverse := routeFlag{routes: &routes}
+	forward := routeFlag{routes: &routes, forward: true}
+	if (routeFlag{}).String() != "" {
+		t.Fatal("nil route flag should be empty")
+	}
+	for _, item := range []struct {
+		flag  routeFlag
+		value string
+	}{
+		{reverse, "127.0.0.1:1=one"}, {forward, "127.0.0.1:2=two"},
+		{reverse, "127.0.0.1:3=three"}, {forward, "127.0.0.1:4=four"},
+	} {
+		if err := item.flag.Set(item.value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, r := range routes {
+		if r.forward != (i%2 == 1) {
+			t.Errorf("route %d: forward = %v", i, r.forward)
+		}
+	}
+	if !strings.Contains(reverse.String(), "one") {
+		t.Fatal("String omitted routes")
+	}
+}
+
+func TestRunStartsAndStopsMixedListeners(t *testing.T) {
+	leaf := newPKI(t).leaf(t, x509.ExtKeyUsageClientAuth)
+	key, err := x509.MarshalPKCS8PrivateKey(leaf.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{
+		"CERT": string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Certificate[0]})),
+		"KEY":  string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})),
+	}
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- run(ctx, []string{"-cert-env", "CERT", "-key-env", "KEY", "-ca-out", ca,
+			"-route", "127.0.0.1:0=one", "-forward", "127.0.0.1:0=two",
+			"-route", "127.0.0.1:0=three", "-forward", "127.0.0.1:0=four"},
+			func(name string) string { return values[name] }, io.Discard)
+	}()
+	deadline := time.After(5 * time.Second)
+	for {
+		if _, err := os.Stat(ca); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("run stopped before startup: %v", err)
+		case <-deadline:
+			t.Fatal("timed out waiting for CA")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not stop")
+	}
+}
