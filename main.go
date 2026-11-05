@@ -239,10 +239,34 @@ func certificateFromEnv(certEnv, keyEnv string) (tls.Certificate, error) {
 	return tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 }
 
-func serve(ctx context.Context, routes []route, transport http.RoundTripper, serverCert tls.Certificate) error {
+func serve(ctx context.Context, routes []route, transport http.RoundTripper, caOut string) error {
+	listeners := make([]net.Listener, 0, len(routes))
+	defer func() {
+		for _, listener := range listeners {
+			listener.Close()
+		}
+	}()
+	for _, r := range routes {
+		listener, err := net.Listen("tcp", r.listen)
+		if err != nil {
+			return err
+		}
+		listeners = append(listeners, listener)
+	}
+
+	var serverCert tls.Certificate
+	if slices.ContainsFunc(routes, func(r route) bool { return !r.forward }) {
+		var err error
+		if serverCert, err = newServerCertificate(routes); err != nil {
+			return err
+		}
+		if err = writeCertificate(caOut, serverCert); err != nil {
+			return err
+		}
+	}
 	errs := make(chan error, len(routes))
 	servers := make([]*http.Server, 0, len(routes))
-	for _, r := range routes {
+	for i, r := range routes {
 		server := &http.Server{
 			Addr:              r.listen,
 			Handler:           newProxy(r.upstream, transport),
@@ -257,11 +281,11 @@ func serve(ctx context.Context, routes []route, transport http.RoundTripper, ser
 		servers = append(servers, server)
 		if r.forward {
 			server.Handler = newForwardProxy(r.upstream, transport)
-			go func() { errs <- server.ListenAndServe() }()
+			go func() { errs <- server.Serve(listeners[i]) }()
 			log.Printf("forward http://%s -> https://%s", r.listen, r.upstream)
 			continue
 		}
-		go func() { errs <- server.ListenAndServeTLS("", "") }()
+		go func() { errs <- server.ServeTLS(listeners[i], "", "") }()
 		log.Printf("https://%s -> https://%s", r.listen, r.upstream)
 	}
 	var err error
@@ -307,19 +331,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	var serverCert tls.Certificate
-	if needsTLS {
-		if serverCert, err = newServerCertificate(routes); err != nil {
-			log.Fatal(err)
-		}
-		if err := writeCertificate(*caOut, serverCert); err != nil {
-			log.Fatal(err)
-		}
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := serve(ctx, routes, newTransport(cert, nil), serverCert); err != nil {
+	if err := serve(ctx, routes, newTransport(cert, nil), *caOut); err != nil {
 		log.Fatal(err)
 	}
 }
