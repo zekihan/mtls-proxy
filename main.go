@@ -331,6 +331,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if err := checkClientCertificate(&cert, time.Now(), log.Default()); err != nil {
+		log.Fatal(err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := serve(ctx, routes, newTransport(cert, nil), *caOut); err != nil {

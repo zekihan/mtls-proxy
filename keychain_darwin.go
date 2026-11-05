@@ -2,7 +2,9 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"time"
 
 	"github.com/github/smimesign/certstore"
 )
@@ -16,18 +18,29 @@ func keychainCertificate(name string) (tls.Certificate, error) {
 	}
 	identities, err := store.Identities()
 	if err != nil {
+		store.Close()
 		return tls.Certificate{}, fmt.Errorf("list keychain identities: %w", err)
 	}
-	for _, identity := range identities {
-		leaf, err := identity.Certificate()
-		if err != nil || leaf.Subject.CommonName != name {
-			continue
-		}
-		signer, err := identity.Signer()
-		if err != nil {
-			return tls.Certificate{}, fmt.Errorf("open signer for %s: %w", name, err)
-		}
-		return tls.Certificate{Certificate: [][]byte{leaf.Raw}, PrivateKey: signer, Leaf: leaf}, nil
+	leaves := make([]*x509.Certificate, len(identities))
+	for i, identity := range identities {
+		leaves[i], _ = identity.Certificate()
 	}
-	return tls.Certificate{}, fmt.Errorf("keychain identity %q not found", name)
+	selected, err := selectIdentity(leaves, name, time.Now())
+	for i, identity := range identities {
+		if i != selected {
+			identity.Close()
+		}
+	}
+	if err != nil {
+		store.Close()
+		return tls.Certificate{}, err
+	}
+	signer, err := identities[selected].Signer()
+	if err != nil {
+		identities[selected].Close()
+		store.Close()
+		return tls.Certificate{}, fmt.Errorf("open signer for %s: %w", name, err)
+	}
+	leaf := leaves[selected]
+	return tls.Certificate{Certificate: [][]byte{leaf.Raw}, PrivateKey: signer, Leaf: leaf}, nil
 }
