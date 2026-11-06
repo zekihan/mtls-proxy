@@ -146,7 +146,8 @@ func writeCertificate(path string, cert tls.Certificate) error {
 		err = os.Rename(file.Name(), path)
 	}
 	if err != nil {
-		os.Remove(file.Name())
+		// Cleanup is best-effort; preserve the original write error.
+		_ = os.Remove(file.Name())
 	}
 	return err
 }
@@ -233,8 +234,9 @@ func loadCertificateWithEnv(source certificateSource, getenv func(string) string
 // later code never see the key.
 func certificateFromEnv(certEnv, keyEnv string, getenv func(string) string) (tls.Certificate, error) {
 	certPEM, keyPEM := getenv(certEnv), getenv(keyEnv)
-	os.Unsetenv(certEnv)
-	os.Unsetenv(keyEnv)
+	// Removing secrets from the process environment is best-effort.
+	_ = os.Unsetenv(certEnv)
+	_ = os.Unsetenv(keyEnv)
 	if certPEM == "" {
 		return tls.Certificate{}, fmt.Errorf("%s is empty", certEnv)
 	}
@@ -248,7 +250,8 @@ func serve(ctx context.Context, routes []route, transport http.RoundTripper, caO
 	listeners := make([]net.Listener, 0, len(routes))
 	defer func() {
 		for _, listener := range listeners {
-			listener.Close()
+			// Listener cleanup must not replace the serve result.
+			_ = listener.Close()
 		}
 	}()
 	for _, r := range routes {
@@ -299,7 +302,8 @@ func serve(ctx context.Context, routes []route, transport http.RoundTripper, caO
 	case <-ctx.Done():
 	}
 	for _, server := range servers {
-		server.Close()
+		// Closing during cancellation is best-effort; return the serve error.
+		_ = server.Close()
 	}
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
