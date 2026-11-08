@@ -32,6 +32,7 @@ func proxyRequestSeeds() []string {
 		"GET http://UPSTREAM.TEST/ HTTP/1.1\r\nHost: UPSTREAM.TEST\r\n\r\n",
 		"GET http://upstream.tes\u212a/ HTTP/1.1\r\nHost: " + h + "\r\n\r\n",
 		"GET http://\u017fpstream.test/ HTTP/1.1\r\nHost: " + h + "\r\n\r\n",
+		"GET http://up\u017ftream.te\u017ft/ HTTP/1.1\r\nHost: " + h + "\r\n\r\n",
 		"GET http://" + h + "./ HTTP/1.1\r\nHost: " + h + "\r\n\r\n",
 		"GET http://[::1]:9443/ HTTP/1.1\r\nHost: [::1]:9443\r\n\r\n",
 		"GET http://127.0.0.1:9443/ HTTP/1.1\r\nHost: 127.0.0.1:9443\r\n\r\n",
