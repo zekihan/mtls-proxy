@@ -25,6 +25,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -70,7 +71,58 @@ func parseRoute(value string) (route, error) {
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		return route{}, fmt.Errorf("route %q must listen on a loopback IP", value)
 	}
+	if !validUpstream(upstream) {
+		return route{}, fmt.Errorf("route %q: upstream must be host or host:port, with IPv6 in brackets", value)
+	}
 	return route{listen: listen, upstream: upstream}, nil
+}
+
+// validUpstream reports whether upstream is a host name or IP literal with an
+// optional port. Anything else would be dialed as something other than what
+// was configured: "::1" splits into host "::" and port "1".
+func validUpstream(upstream string) bool {
+	host := upstream
+	bracketed := strings.HasPrefix(upstream, "[")
+	if h, port, err := net.SplitHostPort(upstream); err == nil {
+		if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+			return false
+		}
+		host = h
+	} else if bracketed && strings.HasSuffix(upstream, "]") {
+		host = upstream[1 : len(upstream)-1]
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return bracketed == strings.Contains(host, ":")
+	}
+	return !bracketed && validHostname(host)
+}
+
+func validHostname(name string) bool {
+	name = strings.TrimSuffix(name, ".")
+	if name == "" || len(name) > 253 {
+		return false
+	}
+	labels := strings.Split(name, ".")
+	for _, label := range labels {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, c := range []byte(label) {
+			ok := 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '_'
+			if !ok {
+				return false
+			}
+		}
+	}
+	// Resolvers read "127.1" or "0x7f000001" as an IPv4 address.
+	last := strings.ToLower(labels[len(labels)-1])
+	if strings.Trim(last, "0123456789") == "" {
+		return false
+	}
+	if hex, ok := strings.CutPrefix(last, "0x"); ok && strings.Trim(hex, "0123456789abcdef") == "" {
+		return false
+	}
+	return true
 }
 
 // newServerCertificate creates a self-signed certificate for the loopback

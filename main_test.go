@@ -106,6 +106,26 @@ func TestParseRouteRejectsNonLoopback(t *testing.T) {
 	}
 }
 
+func TestParseRouteValidatesUpstream(t *testing.T) {
+	for _, upstream := range []string{
+		"::1", "::8443", "2001:db8::1", "https://x", "a/b", "user@host", "a b", "host:", "host:0",
+		"host:65536", "host:+443", "127.1", "0x7f000001", "1.2.3", "[1.2.3.4]:443", "[host]:443",
+		"[fe80::1%25lo]", "a=b", "-a.example", "a..b", "",
+	} {
+		if _, err := parseRoute("127.0.0.1:1=" + upstream); err == nil {
+			t.Errorf("upstream %q accepted", upstream)
+		}
+	}
+	for _, upstream := range []string{
+		"app.example.com", "APP.example.com:8443", "10.0.0.5", "10.0.0.5:443", "[2001:db8::1]",
+		"[2001:db8::1]:443", "nas", "host_name.internal.", "s3.example.com:65535",
+	} {
+		if _, err := parseRoute("127.0.0.1:1=" + upstream); err != nil {
+			t.Errorf("upstream %q rejected: %v", upstream, err)
+		}
+	}
+}
+
 func TestLoadCertificateFromPEMFiles(t *testing.T) {
 	leaf := newPKI(t).leaf(t, x509.ExtKeyUsageClientAuth)
 	der, err := x509.MarshalPKCS8PrivateKey(leaf.PrivateKey)
