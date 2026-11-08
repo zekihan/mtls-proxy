@@ -258,12 +258,34 @@ func newProxy(upstream string, transport http.RoundTripper) http.Handler {
 func newForwardProxy(upstream string, transport http.RoundTripper) http.Handler {
 	proxy := newProxy(upstream, transport)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodConnect || !strings.EqualFold(r.Host, upstream) {
+		if r.Method == http.MethodConnect || !asciiEqualFold(r.Host, upstream) {
 			http.Error(w, "target not allowed", http.StatusForbidden)
 			return
 		}
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+// asciiEqualFold compares host names case-insensitively in ASCII only.
+// strings.EqualFold also folds Unicode, so "ſ3.example.com" would match
+// "s3.example.com".
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 type certificateSource struct {

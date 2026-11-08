@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log"
 	"math/big"
@@ -763,5 +764,23 @@ func TestProxyRejectsInvalidUpstreamStatus(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusBadGateway {
 		t.Errorf("status %d, want %d", response.StatusCode, http.StatusBadGateway)
+	}
+}
+
+func TestForwardProxyComparesHostsInASCII(t *testing.T) {
+	forward := newForwardProxy("s3.example.com", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Errorf("host %q reached the transport", r.Host)
+		return nil, errors.New("unreachable")
+	}))
+	for _, host := range []string{"\u017f3.example.com", "\u017f3.EXAMPLE.COM", "s3.example.com\u017f"} {
+		request := httptest.NewRequest(http.MethodGet, "http://"+host+"/", nil)
+		recorder := httptest.NewRecorder()
+		forward.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Errorf("host %q got status %d", host, recorder.Code)
+		}
+	}
+	if !asciiEqualFold("S3.Example.COM", "s3.example.com") {
+		t.Error("ASCII case folding failed")
 	}
 }
