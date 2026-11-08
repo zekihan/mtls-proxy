@@ -1,0 +1,4 @@
+go test fuzz v1
+byte('?')
+byte('\x03')
+[]byte("HTTP/0.0 101\nConneCtion: UpgrAde \nUpgrAde:weBsoCket\n\r\n0")

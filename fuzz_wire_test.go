@@ -241,8 +241,11 @@ func readWireRequest(br *bufio.Reader) (*wireRequest, error) {
 	if r.target == "" {
 		r.violations = append(r.violations, "empty request-target")
 	}
+	query := strings.IndexByte(r.target, '?')
 	for i := 0; i < len(r.target); i++ {
-		if c := r.target[i]; c <= 0x20 || c >= 0x7f {
+		// net/http passes a client's raw non-ASCII query bytes through;
+		// docs/fuzzing.md records that. Controls and spaces never pass.
+		if c := r.target[i]; c <= 0x20 || c == 0x7f || c > 0x7f && (query < 0 || i < query) {
 			r.violations = append(r.violations, fmt.Sprintf("byte %#x in request-target %q", c, r.target))
 			break
 		}

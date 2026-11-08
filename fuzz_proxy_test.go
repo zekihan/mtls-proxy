@@ -174,6 +174,13 @@ func responseViolations(run *proxyRun, method string, upgrade bool) []string {
 			add("too many responses")
 			return out
 		}
+		if upgrade {
+			// After a 101 the upstream owns the raw tunnel, so its status
+			// line is not the proxy's to check (docs/fuzzing.md).
+			if peek, _ := br.Peek(16); isSwitchingProtocols(peek) {
+				return out
+			}
+		}
 		resp, err := readWireResponse(br, method)
 		if errors.Is(err, errIncomplete) {
 			// Truncated: the proxy aborted mid-body, which closes the
@@ -224,4 +231,9 @@ func responseViolations(run *proxyRun, method string, upgrade bool) []string {
 		}
 		return out
 	}
+}
+
+func isSwitchingProtocols(statusLine []byte) bool {
+	_, rest, ok := bytes.Cut(statusLine, []byte(" "))
+	return ok && bytes.HasPrefix(rest, []byte("101"))
 }
