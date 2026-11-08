@@ -1,0 +1,4 @@
+go test fuzz v1
+byte('\x00')
+byte('\x01')
+[]byte("HTTP/0.0 000 \n\n")
