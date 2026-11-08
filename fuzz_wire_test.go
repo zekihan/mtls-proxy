@@ -161,8 +161,8 @@ func readWireBody(br *bufio.Reader, m *wireMessage, bodyAllowed bool) error {
 	}
 	n, _ := strconv.ParseInt(cl[0], 10, 64)
 	if n > 16<<20 {
-		m.violations = append(m.violations, fmt.Sprintf("Content-Length %d too large for the harness", n))
-		return nil
+		// Too large to buffer; a valid length, so stop reading instead.
+		return errIncomplete
 	}
 	m.body = make([]byte, n)
 	if _, err := io.ReadFull(br, m.body); err != nil {
@@ -199,8 +199,7 @@ func readWireChunked(br *bufio.Reader, m *wireMessage) error {
 			return nil
 		}
 		if int64(len(m.body))+n > 16<<20 {
-			m.violations = append(m.violations, "chunked body too large for the harness")
-			return nil
+			return errIncomplete
 		}
 		chunk := make([]byte, n+2)
 		if _, err := io.ReadFull(br, chunk); err != nil {
