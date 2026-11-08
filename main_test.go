@@ -605,6 +605,8 @@ func TestRunValidation(t *testing.T) {
 		{"invalid address", []string{"-route", "bad=example.com"}, "missing port"},
 		{"non loopback", []string{"-forward", "0.0.0.0:0=example.com"}, "loopback IP"},
 		{"conflicting sources", []string{"-forward", "127.0.0.1:0=example.com", "-identity", "id", "-cert", "c", "-key", "k"}, "set one of -identity"},
+		{"positional argument", []string{"-forward", "127.0.0.1:0=example.com", "extra"}, `unexpected argument "extra"`},
+		{"routes after --", []string{"-forward", "127.0.0.1:0=example.com", "--", "-forward", "127.0.0.1:0=other.example.com"}, `unexpected argument "-forward"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer

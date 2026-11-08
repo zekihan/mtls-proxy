@@ -392,6 +392,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	if err := flags.Parse(args); err != nil {
 		return flagError{err}
 	}
+	// Parsing stops at the first non-flag, so later routes would be dropped.
+	if flags.NArg() > 0 {
+		return fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	}
 
 	if len(routes) == 0 {
 		return errors.New("at least one -route or -forward is required")
