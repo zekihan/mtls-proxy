@@ -173,6 +173,14 @@ func newProxy(upstream string, transport http.RoundTripper) http.Handler {
 	proxy := &httputil.ReverseProxy{
 		Rewrite:   func(r *httputil.ProxyRequest) { r.SetURL(target) },
 		Transport: transport,
+		// The transport accepts any three digits, but WriteHeader panics on
+		// a code below 100, so an upstream "000" would abort the handler.
+		ModifyResponse: func(r *http.Response) error {
+			if r.StatusCode < 100 {
+				return fmt.Errorf("upstream returned invalid status %d", r.StatusCode)
+			}
+			return nil
+		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// A target like "http:evil.example/x" parses as opaque, and the

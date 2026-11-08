@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -697,5 +698,48 @@ func TestProxyRejectsOpaqueRequestTargets(t *testing.T) {
 			}
 		}
 		proxy.Close()
+	}
+}
+
+func TestProxyRejectsInvalidUpstreamStatus(t *testing.T) {
+	ca := newPKI(t)
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{ca.leaf(t, x509.ExtKeyUsageServerAuth)},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    ca.pool,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				if _, err := http.ReadRequest(bufio.NewReader(conn)); err == nil {
+					_, _ = io.WriteString(conn, "HTTP/1.1 000 \r\nContent-Length: 0\r\n\r\n")
+				}
+			}()
+		}
+	}()
+
+	var logs bytes.Buffer
+	transport := newTransport(ca.leaf(t, x509.ExtKeyUsageClientAuth), ca.pool)
+	proxy := httptest.NewUnstartedServer(newProxy(listener.Addr().String(), transport))
+	proxy.Config.ErrorLog = log.New(&logs, "", 0)
+	proxy.Start()
+	defer proxy.Close()
+
+	response, err := http.Get(proxy.URL)
+	if err != nil {
+		t.Fatalf("%v, server log %q", err, logs.String())
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Errorf("status %d, want %d", response.StatusCode, http.StatusBadGateway)
 	}
 }
