@@ -666,3 +666,36 @@ func TestRunStartsAndStopsMixedListeners(t *testing.T) {
 		t.Fatal("run did not stop")
 	}
 }
+
+func TestProxyRejectsOpaqueRequestTargets(t *testing.T) {
+	ca := newPKI(t)
+	upstream := mtlsUpstream(t, ca, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("request-target %q reached upstream", r.RequestURI)
+	}))
+	transport := newTransport(ca.leaf(t, x509.ExtKeyUsageClientAuth), ca.pool)
+	for _, handler := range []http.Handler{newProxy(upstream, transport), newForwardProxy(upstream, transport)} {
+		proxy := httptest.NewServer(handler)
+		for _, line := range []string{
+			"GET http:evil.example/x HTTP/1.1",
+			"GET http:" + upstream + " HTTP/1.1",
+			"connect http:evil.example:443 HTTP/1.1",
+		} {
+			conn, err := net.Dial("tcp", proxy.Listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.WriteString(conn, line+"\r\nHost: "+upstream+"\r\nConnection: close\r\n\r\n")
+			response, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(response.Body)
+			response.Body.Close()
+			conn.Close()
+			if response.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "request target not allowed") {
+				t.Errorf("%q got status %d body %q", line, response.StatusCode, body)
+			}
+		}
+		proxy.Close()
+	}
+}

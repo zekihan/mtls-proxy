@@ -175,6 +175,12 @@ func newProxy(upstream string, transport http.RoundTripper) http.Handler {
 		Transport: transport,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A target like "http:evil.example/x" parses as opaque, and the
+		// transport would send it verbatim as the upstream request-target.
+		if r.URL.Opaque != "" {
+			http.Error(w, "request target not allowed", http.StatusBadRequest)
+			return
+		}
 		// Browsers set Sec-Fetch-Site and pages cannot change it. Refuse requests
 		// made by another site, so a web page cannot use the client identity.
 		switch r.Header.Get("Sec-Fetch-Site") {
