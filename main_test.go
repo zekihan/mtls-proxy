@@ -535,7 +535,8 @@ func TestServeTrustedThroughWrittenCertificate(t *testing.T) {
 	}
 
 	unpinned := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{}}}
-	if _, err := unpinned.Get("https://" + addr + "/"); err == nil {
+	if resp, err := unpinned.Get("https://" + addr + "/"); err == nil {
+		resp.Body.Close()
 		t.Error("client without the written certificate connected")
 	}
 	plain, err := http.Get("http://" + addr + "/")

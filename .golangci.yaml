@@ -1,17 +1,32 @@
 version: "2"
 run:
   timeout: 5m
+  tests: true
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
 linters:
-  default: none
+  default: standard
   enable:
-    - errcheck
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - errorlint
+    - misspell
+    - nilerr
+    - unconvert
+  settings:
+    errcheck:
+      exclude-functions: [fmt.Fprintln]
+    misspell:
+      locale: US
   exclusions:
+    generated: lax
+    presets: [common-false-positives, std-error-handling]
     rules:
       - path: _test\.go$
         linters: [errcheck]
 formatters:
   enable: [gofmt]
+  exclusions:
+    generated: lax

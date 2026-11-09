@@ -293,7 +293,7 @@ func runProxy(mode proxyMode, input []byte, respond respondFunc, waitHandlers bo
 			// ReverseProxy aborts with ErrAbortHandler on purpose; any
 			// other panic is a bug.
 			if p := recover(); p != nil {
-				if p != http.ErrAbortHandler {
+				if p != http.ErrAbortHandler { //nolint:errorlint // recovered panic value, compared by identity
 					mu.Lock()
 					run.panics = append(run.panics, fmt.Sprint(p))
 					mu.Unlock()
