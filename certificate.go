@@ -3,11 +3,28 @@ package main
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 )
+
+func (s certificateSource) checkCAOutput(path string) error {
+	// A new output has no file identity to compare. The writer handles path errors.
+	output, _ := os.Stat(path)
+	if output == nil {
+		return nil
+	}
+	if cert, err := os.Stat(s.certFile); err == nil && os.SameFile(output, cert) {
+		return errors.New("-ca-out must use a different file from -cert")
+	}
+	if key, err := os.Stat(s.keyFile); err == nil && os.SameFile(output, key) {
+		return errors.New("-ca-out must use a different file from -key")
+	}
+	return nil
+}
 
 func selectIdentity(leaves []*x509.Certificate, name string, now time.Time) (int, error) {
 	selected := -1
