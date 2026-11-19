@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"crypto/x509"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -93,5 +95,61 @@ func TestProxyTimesOutWaitingForUpstreamHeaders(t *testing.T) {
 	}
 	if response.StatusCode != http.StatusBadGateway {
 		t.Errorf("status %d, want %d", response.StatusCode, http.StatusBadGateway)
+	}
+}
+
+func TestProxyOmitsUpstreamErrorDetails(t *testing.T) {
+	ca := newPKI(t)
+	const token = "synthetic-session-token"
+	for _, tc := range []struct {
+		name   string
+		wire   string
+		status int
+	}{
+		{
+			name:   "malformed header",
+			wire:   "HTTP/1.1 200 OK\r\nSet-Cookie session=" + token + "\r\n\r\n",
+			status: http.StatusBadGateway,
+		},
+		{
+			name:   "malformed trailer",
+			wire:   "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\nX-Internal-Token " + token + "\r\n\r\n",
+			status: http.StatusOK,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs logRecords
+			output := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(output) })
+
+			upstream := mtlsUpstream(t, ca, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				conn, buffered, err := http.NewResponseController(w).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer conn.Close()
+				if _, err := buffered.WriteString(tc.wire); err != nil {
+					t.Error(err)
+					return
+				}
+				if err := buffered.Flush(); err != nil {
+					t.Error(err)
+				}
+			}))
+			transport := newTransport(ca.leaf(t, x509.ExtKeyUsageClientAuth), ca.pool)
+			t.Cleanup(transport.CloseIdleConnections)
+			recorder := httptest.NewRecorder()
+			newProxy(upstream, transport).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+			if recorder.Code != tc.status || strings.Contains(recorder.Body.String(), token) {
+				t.Errorf("proxy returned status %d, body %q", recorder.Code, recorder.Body.String())
+			}
+			records := strings.Join(logs.all(), "")
+			if records == "" || strings.Contains(records, token) {
+				t.Errorf("expected a log without the upstream token, got %q", records)
+			}
+		})
 	}
 }

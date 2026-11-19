@@ -690,6 +690,60 @@ func TestRunValidation(t *testing.T) {
 	}
 }
 
+func TestRunProtectsClientCredentialsFromCAOutput(t *testing.T) {
+	pki := getFuzzPKI()
+	for _, tc := range []struct {
+		name   string
+		output string
+		flag   string
+	}{
+		{"certificate", "client.pem", "-cert"},
+		{"private key", "client.key", "-key"},
+		{"directory alias", "alias/client.key", "-key"},
+		{"separate output", "ca.pem", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			certFile, keyFile := filepath.Join(dir, "client.pem"), filepath.Join(dir, "client.key")
+			credentials := map[string][]byte{certFile: pki.clientCertPEM, keyFile: pki.clientKeyPEM}
+			for path, contents := range credentials {
+				if err := os.WriteFile(path, contents, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(dir, filepath.Join(dir, "alias")); err != nil {
+				t.Fatal(err)
+			}
+			caOut := filepath.Join(dir, tc.output)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			err := run(ctx, []string{
+				"-cert", certFile, "-key", keyFile, "-ca-out", caOut,
+				"-route", "127.0.0.1:0=example.test",
+			}, os.Getenv, io.Discard)
+			if tc.flag == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(caOut); err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "-ca-out") || !strings.Contains(err.Error(), tc.flag) {
+				t.Errorf("run returned %v, want a -ca-out conflict with %s", err, tc.flag)
+			}
+			for path, want := range credentials {
+				got, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(got, want) {
+					t.Errorf("startup replaced %s", filepath.Base(path))
+				}
+			}
+		})
+	}
+}
+
 func TestRouteFlags(t *testing.T) {
 	var routes []route
 	reverse := routeFlag{routes: &routes}

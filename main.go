@@ -224,6 +224,14 @@ func newTransport(cert tls.Certificate, roots *x509.CertPool) *http.Transport {
 	}
 }
 
+type proxyErrorLog struct{}
+
+func (proxyErrorLog) Write(message []byte) (int, error) {
+	// ReverseProxy errors can include raw upstream headers and trailers.
+	log.Print("http: proxy error")
+	return len(message), nil
+}
+
 func newProxy(upstream string, transport http.RoundTripper) http.Handler {
 	return newUpstreamProxy(upstream, transport, false)
 }
@@ -238,6 +246,7 @@ func newUpstreamProxy(upstream string, transport http.RoundTripper, preserveHost
 			}
 		},
 		Transport: transport,
+		ErrorLog:  log.New(proxyErrorLog{}, "", 0),
 		// The transport accepts any three digits, but WriteHeader panics on
 		// a code below 100, so an upstream "000" would abort the handler.
 		ModifyResponse: func(r *http.Response) error {
@@ -463,15 +472,21 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	if needsTLS && *caOut == "" {
 		return errors.New("-ca-out is required with -route")
 	}
-	cert, err := loadCertificateWithEnv(certificateSource{
+	source := certificateSource{
 		identity: *identity,
 		certFile: *certFile,
 		keyFile:  *keyFile,
 		certEnv:  *certEnv,
 		keyEnv:   *keyEnv,
-	}, getenv)
+	}
+	cert, err := loadCertificateWithEnv(source, getenv)
 	if err != nil {
 		return err
+	}
+	if needsTLS && source.certFile != "" {
+		if err := source.checkCAOutput(*caOut); err != nil {
+			return err
+		}
 	}
 	if err := checkClientCertificate(&cert, time.Now(), log.Default()); err != nil {
 		return err
