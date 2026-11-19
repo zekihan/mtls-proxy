@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -480,9 +481,9 @@ func serve(ctx context.Context, routes []route, transport http.RoundTripper, caO
 	return err
 }
 
-func run(ctx context.Context, args []string, getenv func(string) string, stderr io.Writer) error {
+func run(ctx context.Context, args []string, getenv func(string) string, flagOutput io.Writer) error {
 	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
-	flags.SetOutput(stderr)
+	flags.SetOutput(flagOutput)
 	var routes []route
 	identity := flags.String("identity", "", "macOS Keychain identity common name, e.g. clients-laptop")
 	certFile := flags.String("cert", "", "PEM client certificate, used with -key")
@@ -526,7 +527,15 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	if err := checkClientCertificate(&cert, time.Now(), log.Default()); err != nil {
 		return err
 	}
-	return serve(ctx, routes, newTransport(cert, nil), *caOut)
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return fmt.Errorf("load upstream system CA certificates: %w", err)
+	}
+	// A pool backed by the platform verifier differs from an empty file-based pool.
+	if roots.Equal(x509.NewCertPool()) {
+		return errors.New("upstream system trust store contains no certificates")
+	}
+	return serve(ctx, routes, newTransport(cert, roots), *caOut)
 }
 
 type flagError struct{ error }
@@ -534,12 +543,18 @@ type flagError struct{ error }
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Getenv, os.Stderr); err != nil {
+	// Flag parsing writes usage before returning either help or a parse error.
+	var flagOutput bytes.Buffer
+	if err := run(ctx, os.Args[1:], os.Getenv, &flagOutput); err != nil {
 		var parseErr flagError
 		if errors.As(err, &parseErr) {
 			if errors.Is(parseErr.error, flag.ErrHelp) {
+				if _, err := flagOutput.WriteTo(os.Stdout); err != nil {
+					log.Fatal(err)
+				}
 				return
 			}
+			_, _ = flagOutput.WriteTo(os.Stderr)
 			os.Exit(2)
 		}
 		log.Fatal(err)
