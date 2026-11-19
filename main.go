@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -460,10 +461,19 @@ func serve(ctx context.Context, routes []route, transport http.RoundTripper, caO
 	case err = <-errs:
 	case <-ctx.Done():
 	}
+	// Give every route the same grace period so a busy listener cannot delay
+	// shutdown of the other listeners.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var shutdown sync.WaitGroup
 	for _, server := range servers {
-		// Closing during cancellation is best-effort; return the serve error.
-		_ = server.Close()
+		shutdown.Go(func() {
+			if err := server.Shutdown(shutdownCtx); err != nil {
+				_ = server.Close()
+			}
+		})
 	}
+	shutdown.Wait()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

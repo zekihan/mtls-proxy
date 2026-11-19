@@ -52,6 +52,9 @@ The proxy only listens on loopback IPs and refuses anything else.
 After sending the full request, the proxy waits up to one minute for upstream
 response headers.
 
+On interrupt or SIGTERM, the proxy stops accepting connections and gives active
+HTTP requests up to five seconds to finish.
+
 ### `-route`: HTTPS reverse proxy
 
 Point the client at `https://127.0.0.1:18443` (or `wss://` for WebSockets). The proxy
