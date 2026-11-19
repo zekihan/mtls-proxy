@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -73,5 +74,32 @@ func TestCLIRejectsUnusableSystemRoots(t *testing.T) {
 				t.Fatalf("exit = %v, output = %q, want exit 1 and %q", err, output, tc.want)
 			}
 		})
+	}
+}
+
+func TestCLIHelpUsesStdout(t *testing.T) {
+	for _, arg := range []string{"-h", "--help"} {
+		t.Run(arg, func(t *testing.T) {
+			cmd := cliCommand(t, arg)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			stdout, err := cmd.Output()
+			if err != nil || stderr.Len() != 0 || !bytes.Contains(stdout, []byte("Usage of mtls-proxy:")) ||
+				!bytes.Contains(stdout, []byte("-forward")) {
+				t.Fatalf("exit = %v, stdout = %q, stderr = %q", err, stdout, stderr.String())
+			}
+		})
+	}
+}
+
+func TestCLIFlagErrorUsesStderr(t *testing.T) {
+	stdout, err := cliCommand(t, "-unknown").Output()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+		t.Fatalf("exit = %v, stdout = %q, want exit 2", err, stdout)
+	}
+	if len(stdout) != 0 || !bytes.Contains(exitErr.Stderr, []byte("flag provided but not defined: -unknown")) ||
+		!bytes.Contains(exitErr.Stderr, []byte("Usage of mtls-proxy:")) {
+		t.Fatalf("stdout = %q, stderr = %q", stdout, exitErr.Stderr)
 	}
 }
