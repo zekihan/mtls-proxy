@@ -217,6 +217,8 @@ func newTransport(cert tls.Certificate, roots *x509.CertPool) *http.Transport {
 		},
 		TLSHandshakeTimeout: 10 * time.Second,
 		IdleConnTimeout:     90 * time.Second,
+		// Preserve the client's Accept-Encoding and the upstream's encoded bytes.
+		DisableCompression: true,
 	}
 }
 
@@ -245,6 +247,8 @@ func newProxy(upstream string, transport http.RoundTripper) http.Handler {
 		// made by another site, so a web page cannot use the client identity.
 		switch r.Header.Get("Sec-Fetch-Site") {
 		case "", "same-origin", "none":
+			// The upstream may stream a response before the upload finishes.
+			_ = http.NewResponseController(w).EnableFullDuplex()
 			proxy.ServeHTTP(w, r)
 		default:
 			http.Error(w, "cross-site request not allowed", http.StatusForbidden)
