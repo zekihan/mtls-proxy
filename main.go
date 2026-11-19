@@ -65,9 +65,12 @@ func parseRoute(value string) (route, error) {
 	if !ok || upstream == "" {
 		return route{}, fmt.Errorf("route %q must be listen=upstream", value)
 	}
-	host, _, err := net.SplitHostPort(listen)
+	host, port, err := net.SplitHostPort(listen)
 	if err != nil {
 		return route{}, fmt.Errorf("route %q: %w", value, err)
+	}
+	if port == "" {
+		return route{}, fmt.Errorf("route %q: missing port in listen address", value)
 	}
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		return route{}, fmt.Errorf("route %q must listen on a loopback IP", value)
