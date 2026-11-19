@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -535,6 +536,32 @@ func TestServeBindFailurePreservesCaOut(t *testing.T) {
 		t.Fatalf("first listener was not closed: %v", err)
 	}
 	listener.Close()
+}
+
+func TestServeLogsBoundListenerAddresses(t *testing.T) {
+	var records logRecords
+	output := log.Writer()
+	log.SetOutput(&records)
+	t.Cleanup(func() { log.SetOutput(output) })
+
+	routes := []route{
+		{listen: "127.0.0.1:0", upstream: "reverse.test"},
+		{listen: "127.0.0.1:0", upstream: "forward.test", forward: true},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := serve(ctx, routes, http.DefaultTransport, filepath.Join(t.TempDir(), "ca.pem")); err != nil {
+		t.Fatal(err)
+	}
+	logs := strings.Join(records.all(), "")
+	for _, pattern := range []string{
+		`https://127\.0\.0\.1:[1-9][0-9]* -> https://reverse\.test\n`,
+		`forward http://127\.0\.0\.1:[1-9][0-9]* -> https://forward\.test\n`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(logs) {
+			t.Errorf("startup logs %q do not match %q", logs, pattern)
+		}
+	}
 }
 
 func TestServerCertificateOnlySignsListenerIPs(t *testing.T) {

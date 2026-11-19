@@ -430,6 +430,7 @@ func serve(ctx context.Context, routes []route, transport http.RoundTripper, caO
 	errs := make(chan error, len(routes))
 	servers := make([]*http.Server, 0, len(routes))
 	for i, r := range routes {
+		listener := listeners[i]
 		server := &http.Server{
 			Addr:              r.listen,
 			Handler:           newProxy(r.upstream, transport),
@@ -444,12 +445,12 @@ func serve(ctx context.Context, routes []route, transport http.RoundTripper, caO
 		servers = append(servers, server)
 		if r.forward {
 			server.Handler = newForwardProxy(r.upstream, transport)
-			go func() { errs <- server.Serve(listeners[i]) }()
-			log.Printf("forward http://%s -> https://%s", r.listen, r.upstream)
+			go func() { errs <- server.Serve(listener) }()
+			log.Printf("forward http://%s -> https://%s", listener.Addr(), r.upstream)
 			continue
 		}
-		go func() { errs <- server.ServeTLS(listeners[i], "", "") }()
-		log.Printf("https://%s -> https://%s", r.listen, r.upstream)
+		go func() { errs <- server.ServeTLS(listener, "", "") }()
+		log.Printf("https://%s -> https://%s", listener.Addr(), r.upstream)
 	}
 	var err error
 	select {
