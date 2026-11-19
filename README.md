@@ -65,16 +65,25 @@ on every start. The proxy rewrites `Host` and SNI to the upstream.
 ### `-forward`: `HTTP_PROXY` route for signed requests
 
 Clients that sign the hostname, such as S3 SigV4, cannot use `-route` because the
-`Host` rewrite invalidates the signature. `-forward` keeps the hostname:
+`Host` rewrite invalidates the signature. `-forward` keeps the hostname.
+
+Start the proxy in one terminal.
 
 ```bash
 mtls-proxy -cert client.pem -key client.key -forward 127.0.0.1:18445=s3.example.com
-HTTP_PROXY=http://127.0.0.1:18445 your-client --endpoint http://s3.example.com
+```
+
+Run the client in another terminal. Set both spellings of the HTTP proxy variable
+for client compatibility and clear any inherited proxy bypass for this command.
+
+```bash
+HTTP_PROXY=http://127.0.0.1:18445 http_proxy=http://127.0.0.1:18445 \
+  NO_PROXY= no_proxy= your-client --endpoint http://s3.example.com
 ```
 
 It accepts only that upstream and refuses `CONNECT`, so it cannot be used as an open
-proxy. This hop is plain HTTP on loopback, and TLS starts at the proxy. Do not run
-such a client without `HTTP_PROXY`, or its requests leave the machine unencrypted.
+proxy. This hop is plain HTTP on loopback, and TLS starts at the proxy. A direct
+request to the `http://` endpoint sends data in plaintext.
 
 ## Security
 
