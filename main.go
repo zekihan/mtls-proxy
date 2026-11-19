@@ -215,17 +215,27 @@ func newTransport(cert tls.Certificate, roots *x509.CertPool) *http.Transport {
 				return &cert, nil
 			},
 		},
-		TLSHandshakeTimeout: 10 * time.Second,
-		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: time.Minute,
 		// Preserve the client's Accept-Encoding and the upstream's encoded bytes.
 		DisableCompression: true,
 	}
 }
 
 func newProxy(upstream string, transport http.RoundTripper) http.Handler {
+	return newUpstreamProxy(upstream, transport, false)
+}
+
+func newUpstreamProxy(upstream string, transport http.RoundTripper, preserveHost bool) http.Handler {
 	target := &url.URL{Scheme: "https", Host: upstream}
 	proxy := &httputil.ReverseProxy{
-		Rewrite:   func(r *httputil.ProxyRequest) { r.SetURL(target) },
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(target)
+			if preserveHost {
+				r.Out.Host = r.In.Host
+			}
+		},
 		Transport: transport,
 		// The transport accepts any three digits, but WriteHeader panics on
 		// a code below 100, so an upstream "000" would abort the handler.
@@ -260,7 +270,7 @@ func newProxy(upstream string, transport http.RoundTripper) http.Handler {
 // hostname in the request. SigV4 signs that hostname, so it cannot go through
 // a reverse route. Only the upstream is accepted, so this is not an open proxy.
 func newForwardProxy(upstream string, transport http.RoundTripper) http.Handler {
-	proxy := newProxy(upstream, transport)
+	proxy := newUpstreamProxy(upstream, transport, true)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodConnect || !asciiEqualFold(r.Host, upstream) {
 			http.Error(w, "target not allowed", http.StatusForbidden)

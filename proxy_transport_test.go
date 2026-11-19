@@ -61,3 +61,37 @@ func TestProxyPreservesEncodedResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyTimesOutWaitingForUpstreamHeaders(t *testing.T) {
+	ca := newPKI(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := mtlsUpstream(t, ca, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		<-release
+	}))
+	defer close(release)
+
+	transport := newTransport(ca.leaf(t, x509.ExtKeyUsageClientAuth), ca.pool)
+	// Shorten the configured deadline for the test. A zero value still disables it.
+	transport.ResponseHeaderTimeout = min(transport.ResponseHeaderTimeout, 100*time.Millisecond)
+	t.Cleanup(transport.CloseIdleConnections)
+	proxy := httptest.NewServer(newProxy(upstream, transport))
+	t.Cleanup(proxy.Close)
+	client := proxy.Client()
+	client.Timeout = 3 * time.Second
+
+	response, err := client.Get(proxy.URL)
+	if err != nil {
+		t.Fatalf("waiting for the proxy to report an upstream timeout: %v", err)
+	}
+	defer response.Body.Close()
+	select {
+	case <-started:
+	default:
+		t.Fatal("upstream never received the request")
+	}
+	if response.StatusCode != http.StatusBadGateway {
+		t.Errorf("status %d, want %d", response.StatusCode, http.StatusBadGateway)
+	}
+}

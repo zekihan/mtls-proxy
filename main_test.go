@@ -341,6 +341,43 @@ func TestForwardProxyKeepsHostAndRejectsOtherTargets(t *testing.T) {
 	}
 }
 
+func TestForwardProxyPreservesHostCase(t *testing.T) {
+	certs := getFuzzPKI()
+	const upstream = fuzzUpstreamHost
+	signedHost := strings.ToUpper(upstream)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS.ServerName != upstream {
+			t.Errorf("upstream saw SNI %q, want %q", r.TLS.ServerName, upstream)
+		}
+		_, _ = io.WriteString(w, r.Host)
+	}))
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{certs.server},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    certs.pool,
+	}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	transport := newTransport(certs.client, certs.pool)
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if want := upstream + ":443"; addr != want {
+			t.Errorf("dial address %q, want %q", addr, want)
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request := httptest.NewRequestWithContext(ctx, http.MethodGet, "http://"+signedHost+"/", nil)
+	response := httptest.NewRecorder()
+	newForwardProxy(upstream, transport).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != signedHost {
+		t.Fatalf("status %d, upstream saw Host %q, want %q", response.Code, response.Body.String(), signedHost)
+	}
+}
+
 func freeAddr(t *testing.T) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

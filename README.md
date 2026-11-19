@@ -49,6 +49,9 @@ mtls-proxy -cert <(your-secret-command cert) -key <(your-secret-command key) \
 
 The proxy only listens on loopback IPs and refuses anything else.
 
+After sending the full request, the proxy waits up to one minute for upstream
+response headers.
+
 ### `-route`: HTTPS reverse proxy
 
 Point the client at `https://127.0.0.1:18443` (or `wss://` for WebSockets). The proxy
