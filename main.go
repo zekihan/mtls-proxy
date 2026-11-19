@@ -526,7 +526,15 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 	if err := checkClientCertificate(&cert, time.Now(), log.Default()); err != nil {
 		return err
 	}
-	return serve(ctx, routes, newTransport(cert, nil), *caOut)
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return fmt.Errorf("load upstream system CA certificates: %w", err)
+	}
+	// A pool backed by the platform verifier differs from an empty file-based pool.
+	if roots.Equal(x509.NewCertPool()) {
+		return errors.New("upstream system trust store contains no certificates")
+	}
+	return serve(ctx, routes, newTransport(cert, roots), *caOut)
 }
 
 type flagError struct{ error }
