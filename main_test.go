@@ -177,12 +177,54 @@ func TestLoadCertificateFromEnvClearsTheVariables(t *testing.T) {
 	}
 }
 
-func TestLoadCertificateFromEmptyEnvNamesTheVariable(t *testing.T) {
+func TestLoadCertificateFromEmptyEnvNamesTheFlag(t *testing.T) {
 	t.Setenv("TEST_CERT", "")
 	t.Setenv("TEST_KEY", "x")
 	_, err := loadCertificate(certificateSource{certEnv: "TEST_CERT", keyEnv: "TEST_KEY"})
-	if err == nil || !strings.Contains(err.Error(), "TEST_CERT") {
+	if err == nil || !strings.Contains(err.Error(), "-cert-env must name a non-empty environment variable") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRunRedactsInlinePEMFromCredentialErrors(t *testing.T) {
+	pki := getFuzzPKI()
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "client.pem"), filepath.Join(dir, "client.key")
+	if err := os.WriteFile(certFile, pki.clientCertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pki.clientKeyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	const certEnv, keyEnv = "MTLS_TEST_CLIENT_CERT", "MTLS_TEST_CLIENT_KEY"
+	for _, tc := range []struct {
+		flag string
+		args []string
+		pem  []byte
+	}{
+		{"-cert", []string{"-cert", string(pki.clientCertPEM), "-key", keyFile}, pki.clientCertPEM},
+		{"-key", []string{"-cert", certFile, "-key", string(pki.clientKeyPEM)}, pki.clientKeyPEM},
+		{"-cert-env", []string{"-cert-env", string(pki.clientCertPEM), "-key-env", keyEnv}, pki.clientCertPEM},
+		{"-key-env", []string{"-cert-env", certEnv, "-key-env", string(pki.clientKeyPEM)}, pki.clientKeyPEM},
+	} {
+		t.Run(tc.flag, func(t *testing.T) {
+			t.Setenv(certEnv, string(pki.clientCertPEM))
+			t.Setenv(keyEnv, string(pki.clientKeyPEM))
+			var stderr bytes.Buffer
+			err := run(ctx, append([]string{"-forward", "127.0.0.1:0=example.test"}, tc.args...), os.Getenv, &stderr)
+			if err == nil {
+				t.Fatal("startup unexpectedly accepted inline PEM")
+			}
+			diagnostic := err.Error() + stderr.String()
+			if strings.Contains(diagnostic, "-----BEGIN ") || leakedSecret(diagnostic, base64Lines(tc.pem)) != "" {
+				t.Error("startup diagnostic contains the supplied PEM")
+			}
+			if !strings.Contains(err.Error(), tc.flag) {
+				t.Errorf("startup error did not identify %s", tc.flag)
+			}
+		})
 	}
 }
 

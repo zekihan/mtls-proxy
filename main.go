@@ -354,7 +354,15 @@ func loadCertificateWithEnv(source certificateSource, getenv func(string) string
 		}
 	case certificateSource{certFile: source.certFile, keyFile: source.keyFile}:
 		if source.certFile != "" && source.keyFile != "" {
-			return tls.LoadX509KeyPair(source.certFile, source.keyFile)
+			certPEM, err := readCredentialFile("-cert", source.certFile)
+			if err != nil {
+				return tls.Certificate{}, err
+			}
+			keyPEM, err := readCredentialFile("-key", source.keyFile)
+			if err != nil {
+				return tls.Certificate{}, err
+			}
+			return tls.X509KeyPair(certPEM, keyPEM)
 		}
 	case certificateSource{certEnv: source.certEnv, keyEnv: source.keyEnv}:
 		if source.certEnv != "" && source.keyEnv != "" {
@@ -362,6 +370,19 @@ func loadCertificateWithEnv(source certificateSource, getenv func(string) string
 		}
 	}
 	return tls.Certificate{}, errors.New("set one of -identity, -cert with -key, or -cert-env with -key-env")
+}
+
+func readCredentialFile(option, path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return data, nil
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		// The supplied path may contain PEM that would be echoed by PathError.
+		err = pathErr.Err
+	}
+	return nil, fmt.Errorf("read %s: %w", option, err)
 }
 
 // certificateFromEnv removes the variables once read, so child processes and
@@ -372,10 +393,10 @@ func certificateFromEnv(certEnv, keyEnv string, getenv func(string) string) (tls
 	_ = os.Unsetenv(certEnv)
 	_ = os.Unsetenv(keyEnv)
 	if certPEM == "" {
-		return tls.Certificate{}, fmt.Errorf("%s is empty", certEnv)
+		return tls.Certificate{}, errors.New("-cert-env must name a non-empty environment variable")
 	}
 	if keyPEM == "" {
-		return tls.Certificate{}, fmt.Errorf("%s is empty", keyEnv)
+		return tls.Certificate{}, errors.New("-key-env must name a non-empty environment variable")
 	}
 	return tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 }
