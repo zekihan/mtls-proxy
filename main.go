@@ -224,6 +224,14 @@ func newTransport(cert tls.Certificate, roots *x509.CertPool) *http.Transport {
 	}
 }
 
+type proxyErrorLog struct{}
+
+func (proxyErrorLog) Write(message []byte) (int, error) {
+	// ReverseProxy errors can include raw upstream headers and trailers.
+	log.Print("http: proxy error")
+	return len(message), nil
+}
+
 func newProxy(upstream string, transport http.RoundTripper) http.Handler {
 	return newUpstreamProxy(upstream, transport, false)
 }
@@ -238,6 +246,7 @@ func newUpstreamProxy(upstream string, transport http.RoundTripper, preserveHost
 			}
 		},
 		Transport: transport,
+		ErrorLog:  log.New(proxyErrorLog{}, "", 0),
 		// The transport accepts any three digits, but WriteHeader panics on
 		// a code below 100, so an upstream "000" would abort the handler.
 		ModifyResponse: func(r *http.Response) error {
