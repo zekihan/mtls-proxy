@@ -378,6 +378,39 @@ func TestForwardProxyPreservesHostCase(t *testing.T) {
 	}
 }
 
+func TestForwardProxyMatchesEquivalentIPv6Hosts(t *testing.T) {
+	const expanded = "[2001:0db8:0:0:0:0:0:1]"
+	const compressed = "[2001:db8::1]"
+	for _, tt := range []struct {
+		name     string
+		upstream string
+		host     string
+		status   int
+	}{
+		{"compressed request", expanded, compressed, http.StatusOK},
+		{"expanded request with port", compressed + ":8443", expanded + ":8443", http.StatusOK},
+		{"different address", expanded, "[2001:db8::2]", http.StatusForbidden},
+		{"different port", expanded + ":8443", compressed + ":9443", http.StatusForbidden},
+		{"missing port", expanded + ":8443", compressed, http.StatusForbidden},
+		{"extra port", expanded, compressed + ":443", http.StatusForbidden},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			forward := newForwardProxy(tt.upstream, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Host != tt.upstream || r.Host != tt.host {
+					t.Errorf("upstream URL host %q and Host %q, want %q and %q", r.URL.Host, r.Host, tt.upstream, tt.host)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+			}))
+			request := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/", nil)
+			response := httptest.NewRecorder()
+			forward.ServeHTTP(response, request)
+			if response.Code != tt.status {
+				t.Errorf("status %d, want %d", response.Code, tt.status)
+			}
+		})
+	}
+}
+
 func freeAddr(t *testing.T) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

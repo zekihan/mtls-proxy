@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -272,12 +273,34 @@ func newUpstreamProxy(upstream string, transport http.RoundTripper, preserveHost
 func newForwardProxy(upstream string, transport http.RoundTripper) http.Handler {
 	proxy := newUpstreamProxy(upstream, transport, true)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodConnect || !asciiEqualFold(r.Host, upstream) {
+		if r.Method == http.MethodConnect || !matchesForwardHost(r.Host, upstream) {
 			http.Error(w, "target not allowed", http.StatusForbidden)
 			return
 		}
 		proxy.ServeHTTP(w, r)
 	})
+}
+
+func matchesForwardHost(host, upstream string) bool {
+	if asciiEqualFold(host, upstream) {
+		return true
+	}
+	if !strings.HasPrefix(host, "[") || !strings.HasPrefix(upstream, "[") {
+		return false
+	}
+	// IPv6 literals can have different spellings for the same address. Keep
+	// the exact port suffix match, including whether a port was specified.
+	hostLiteral, hostPort, hostOK := strings.Cut(host[1:], "]")
+	upstreamLiteral, upstreamPort, upstreamOK := strings.Cut(upstream[1:], "]")
+	if !hostOK || !upstreamOK || hostPort != upstreamPort {
+		return false
+	}
+	hostIP, err := netip.ParseAddr(hostLiteral)
+	if err != nil || !hostIP.Is6() {
+		return false
+	}
+	upstreamIP, err := netip.ParseAddr(upstreamLiteral)
+	return err == nil && hostIP == upstreamIP
 }
 
 // asciiEqualFold compares host names case-insensitively in ASCII only.
