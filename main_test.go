@@ -744,6 +744,8 @@ func TestRunValidation(t *testing.T) {
 		{"route needs CA", []string{"-route", "127.0.0.1:0=example.com"}, "-ca-out is required with -route"},
 		{"forward does not need CA", []string{"-forward", "127.0.0.1:0=example.com"}, "set one of -identity"},
 		{"invalid address", []string{"-route", "bad=example.com"}, "missing port"},
+		{"empty IPv4 listen port", []string{"-forward", "127.0.0.1:=example.com"}, "missing port"},
+		{"empty IPv6 listen port", []string{"-route", "[::1]:=example.com"}, "missing port"},
 		{"non loopback", []string{"-forward", "0.0.0.0:0=example.com"}, "loopback IP"},
 		{"conflicting sources", []string{"-forward", "127.0.0.1:0=example.com", "-identity", "id", "-cert", "c", "-key", "k"}, "set one of -identity"},
 		{"positional argument", []string{"-forward", "127.0.0.1:0=example.com", "extra"}, `unexpected argument "extra"`},

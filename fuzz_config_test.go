@@ -26,10 +26,10 @@ import (
 )
 
 // refLoopbackListen is an independent check, built on net/netip rather than
-// net.ParseIP, that a listen address names a loopback IP literal.
+// net.ParseIP, that a listen address names a loopback IP literal with a port.
 func refLoopbackListen(listen string) bool {
 	i := strings.LastIndexByte(listen, ':')
-	if i < 0 {
+	if i < 0 || i == len(listen)-1 {
 		return false
 	}
 	host := listen[:i]
@@ -167,7 +167,7 @@ func FuzzParseRoute(f *testing.F) {
 			return
 		}
 		if !refLoopbackListen(r.listen) {
-			t.Fatalf("parseRoute(%q) accepted non-loopback listen %q", value, r.listen)
+			t.Fatalf("parseRoute(%q) accepted invalid listen address %q", value, r.listen)
 		}
 		if addr, err := net.ResolveTCPAddr("tcp", r.listen); err == nil && !addr.IP.IsLoopback() {
 			t.Fatalf("parseRoute(%q): listen %q resolves to %v", value, r.listen, addr.IP)
@@ -201,7 +201,7 @@ func FuzzParseRouteAcceptsValid(f *testing.F) {
 			return
 		}
 		port := listen[strings.LastIndexByte(listen, ':')+1:]
-		if port == "" || strings.Trim(port, "0123456789") != "" || len(port) > 5 {
+		if strings.Trim(port, "0123456789") != "" || len(port) > 5 {
 			return
 		}
 		if _, _, ok := refUpstream(upstream); !ok {
@@ -320,7 +320,7 @@ func FuzzRunArgs(f *testing.F) {
 		for _, v := range values {
 			listen, upstream, _ := strings.Cut(v, "=")
 			if !refLoopbackListen(listen) {
-				t.Fatalf("run accepted non-loopback route %q", v)
+				t.Fatalf("run accepted invalid listen address in %q", v)
 			}
 			if _, _, ok := refUpstream(upstream); !ok {
 				t.Fatalf("run accepted invalid upstream in %q", v)
