@@ -215,8 +215,9 @@ func newTransport(cert tls.Certificate, roots *x509.CertPool) *http.Transport {
 				return &cert, nil
 			},
 		},
-		TLSHandshakeTimeout: 10 * time.Second,
-		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: time.Minute,
 		// Preserve the client's Accept-Encoding and the upstream's encoded bytes.
 		DisableCompression: true,
 	}
