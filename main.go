@@ -185,7 +185,11 @@ func newServerCertificate(routes []route) (tls.Certificate, error) {
 // writeCertificate renames a new file over path, so it never writes through a
 // symlink or into a file that another user created there.
 func writeCertificate(path string, cert tls.Certificate) error {
-	dir := filepath.Dir(path)
+	// Keep ".." components so the filesystem resolves them after symlinks.
+	dir, _ := filepath.Split(path)
+	if dir == filepath.VolumeName(dir) {
+		dir += "."
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
