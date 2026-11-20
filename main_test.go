@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -647,6 +648,38 @@ func TestWriteCertificateReplacesSymlink(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
 		t.Errorf("left %d entries in the directory, want 2", len(entries))
+	}
+}
+
+func TestWriteCertificateResolvesSymlinkBeforeParent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows resolves .. before following directory symlinks")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target", "child")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	der := []byte("synthetic certificate")
+	cert := tls.Certificate{Certificate: [][]byte{der}}
+	// Keep ".." in the path until the filesystem resolves the symlink.
+	if err := writeCertificate(link+"/../state/ca.pem", cert); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "target", "state", "ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block, _ := pem.Decode(data); block == nil || block.Type != "CERTIFICATE" || !bytes.Equal(block.Bytes, der) {
+		t.Errorf("CA file contains %q, want the synthetic certificate", data)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the lexically cleaned directory should be absent, stat error = %v", err)
 	}
 }
 
