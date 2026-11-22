@@ -1,4 +1,4 @@
-// Command mtls_proxy exposes mTLS-protected hosts on loopback for Terraform
+// Command mtls-proxy exposes mTLS-protected hosts on loopback for Terraform
 // providers that cannot present a client certificate.
 package main
 

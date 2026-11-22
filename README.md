@@ -1,9 +1,9 @@
 # mtls-proxy
 
 A small loopback proxy for tools that cannot present a TLS client certificate.
-It listens on `127.0.0.1`, adds your client certificate, and forwards to one
-upstream host. Terraform providers are the usual case: many have no client
-certificate setting and ignore `HTTPS_PROXY`.
+It listens on a loopback address, adds your client certificate, and forwards
+each listener to one upstream host. Terraform providers are the usual case:
+many have no client certificate setting and ignore `HTTPS_PROXY`.
 
 The client certificate can come from the macOS Keychain, so the private key never
 has to be exported, from PEM files, or from environment variables.
@@ -47,10 +47,16 @@ mtls-proxy -cert <(your-secret-command cert) -key <(your-secret-command key) \
   -ca-out ca.pem -route 127.0.0.1:18443=app.example.com
 ```
 
-The proxy only listens on loopback IPs and refuses anything else.
+`-route` and `-forward` can be repeated and mixed. `-ca-out` is required for
+any `-route`. A forward-only proxy does not write a certificate.
 
-After sending the full request, the proxy waits up to one minute for upstream
-response headers.
+The proxy only listens on loopback IPs and refuses anything else. It refuses
+to start when the client certificate is expired or not yet valid, and it logs
+a warning when that certificate expires within 30 days.
+
+A client has ten seconds to send request headers. The upstream TLS handshake
+has the same limit. After sending the full request, the proxy waits up to one
+minute for upstream response headers.
 
 On interrupt or SIGTERM, the proxy stops accepting connections and gives active
 HTTP requests up to five seconds to finish.
@@ -59,7 +65,7 @@ HTTP requests up to five seconds to finish.
 
 Point the client at `https://127.0.0.1:18443` (or `wss://` for WebSockets). The proxy
 serves HTTPS using a self-signed certificate generated at startup. The key stays in
-memory, and the certificate is written to `-ca-out` for the client to pin. It changes
+memory, and the certificate is written to `-ca-out` for the client to trust. It changes
 on every start. The proxy rewrites `Host` and SNI to the upstream.
 
 ### `-forward`: `HTTP_PROXY` route for signed requests

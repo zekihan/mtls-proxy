@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -120,5 +121,17 @@ func TestClientCertificateLogging(t *testing.T) {
 				t.Fatalf("unexpected warning: %s", output.String())
 			}
 		})
+	}
+}
+
+func TestCheckClientCertificateRejectsUnreadableLeaf(t *testing.T) {
+	logger := log.New(&bytes.Buffer{}, "", 0)
+	err := checkClientCertificate(&tls.Certificate{}, time.Now(), logger)
+	if err == nil || !strings.Contains(err.Error(), "no leaf") {
+		t.Fatalf("empty certificate: %v", err)
+	}
+	err = checkClientCertificate(&tls.Certificate{Certificate: [][]byte{[]byte("not a certificate")}}, time.Now(), logger)
+	if err == nil || !strings.Contains(err.Error(), "parse client certificate") {
+		t.Fatalf("malformed certificate: %v", err)
 	}
 }
