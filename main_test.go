@@ -113,7 +113,7 @@ func TestParseRouteValidatesUpstream(t *testing.T) {
 	for _, upstream := range []string{
 		"::1", "::8443", "2001:db8::1", "https://x", "a/b", "user@host", "a b", "host:", "host:0",
 		"host:65536", "host:+443", "127.1", "0x7f000001", "1.2.3", "[1.2.3.4]:443", "[host]:443",
-		"[fe80::1%25lo]", "a=b", "-a.example", "a..b", "",
+		"[fe80::1%25lo]", "a=b", "-a.example", "a..b", "", ".", strings.Repeat("a.", 128),
 	} {
 		if _, err := parseRoute("127.0.0.1:1=" + upstream); err == nil {
 			t.Errorf("upstream %q accepted", upstream)
@@ -434,6 +434,8 @@ func TestForwardProxyMatchesEquivalentIPv6Hosts(t *testing.T) {
 		{"compressed request", expanded, compressed, http.StatusOK},
 		{"expanded request with port", compressed + ":8443", expanded + ":8443", http.StatusOK},
 		{"different address", expanded, "[2001:db8::2]", http.StatusForbidden},
+		{"malformed literal", expanded, "[not-an-ip]", http.StatusForbidden},
+		{"ipv4 in brackets", "[::ffff:127.0.0.1]", "[127.0.0.1]", http.StatusForbidden},
 		{"different port", expanded + ":8443", compressed + ":9443", http.StatusForbidden},
 		{"missing port", expanded + ":8443", compressed, http.StatusForbidden},
 		{"extra port", expanded, compressed + ":443", http.StatusForbidden},
@@ -445,7 +447,11 @@ func TestForwardProxyMatchesEquivalentIPv6Hosts(t *testing.T) {
 				}
 				return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
 			}))
-			request := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/", nil)
+			request, err := http.NewRequest(http.MethodGet, "http://"+tt.host+"/", nil)
+			if err != nil {
+				request = httptest.NewRequest(http.MethodGet, "http://example.invalid/", nil)
+				request.Host = tt.host
+			}
 			response := httptest.NewRecorder()
 			forward.ServeHTTP(response, request)
 			if response.Code != tt.status {
@@ -651,6 +657,72 @@ func TestWriteCertificateReplacesSymlink(t *testing.T) {
 	}
 }
 
+func TestWriteCertificateRelativePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	der := []byte("synthetic certificate")
+	if err := writeCertificate("ca.pem", tls.Certificate{Certificate: [][]byte{der}}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat("ca.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Errorf("mode %v, want 0644", info.Mode().Perm())
+	}
+	data, err := os.ReadFile("ca.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block, _ := pem.Decode(data); block == nil || !bytes.Equal(block.Bytes, der) {
+		t.Fatalf("CA file contains %q", data)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("left %d entries, want the certificate only", len(entries))
+	}
+}
+
+func TestWriteCertificateRemovesTempFileWhenReplaceFails(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "ca.pem")
+	if err := os.Mkdir(dest, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := writeCertificate(dest, tls.Certificate{Certificate: [][]byte{[]byte("synthetic certificate")}})
+	if err == nil {
+		t.Fatal("rename onto a directory succeeded")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "ca.pem" {
+		t.Fatalf("temp file left behind: %v", entries)
+	}
+}
+
+func TestServeReleasesListenerWhenCAOutputFails(t *testing.T) {
+	addr := freeAddr(t)
+	parent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := serve(context.Background(), []route{{listen: addr, upstream: "example.test"}}, http.DefaultTransport, filepath.Join(parent, "ca.pem"))
+	if err == nil {
+		t.Fatal("serve succeeded with a file as the CA parent")
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listener was not closed: %v", err)
+	}
+	listener.Close()
+}
+
 func TestWriteCertificateResolvesSymlinkBeforeParent(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows resolves .. before following directory symlinks")
@@ -805,6 +877,7 @@ func TestRunProtectsClientCredentialsFromCAOutput(t *testing.T) {
 		{"private key", "client.key", "-key"},
 		{"directory alias", "alias/client.key", "-key"},
 		{"separate output", "ca.pem", ""},
+		{"replaces existing output", "ca.pem", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -819,6 +892,11 @@ func TestRunProtectsClientCredentialsFromCAOutput(t *testing.T) {
 				t.Fatal(err)
 			}
 			caOut := filepath.Join(dir, tc.output)
+			if tc.name == "replaces existing output" {
+				if err := os.WriteFile(caOut, []byte("old certificate"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			err := run(ctx, []string{
@@ -829,8 +907,12 @@ func TestRunProtectsClientCredentialsFromCAOutput(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := os.Stat(caOut); err != nil {
+				data, err := os.ReadFile(caOut)
+				if err != nil {
 					t.Fatal(err)
+				}
+				if block, _ := pem.Decode(data); block == nil || block.Type != "CERTIFICATE" || bytes.Equal(data, []byte("old certificate")) {
+					t.Fatalf("CA output = %q", data)
 				}
 			} else if err == nil || !strings.Contains(err.Error(), "-ca-out") || !strings.Contains(err.Error(), tc.flag) {
 				t.Errorf("run returned %v, want a -ca-out conflict with %s", err, tc.flag)
